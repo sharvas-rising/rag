@@ -1,0 +1,15 @@
+[project]
+name = "db-creator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb>=1.5.9",
+    "dotenv>=0.9.9",
+    "fastapi>=0.136.1",
+    "openai>=2.36.0",
+    "pdfplumber>=0.11.9",
+    "psycopg2-binary>=2.9.12",
+    "supabase>=2.30.0",
+]

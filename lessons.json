@@ -1,0 +1,108 @@
+{
+  "lessons": [
+    {
+      "lesson_number": "1",
+      "title": "Lesson 1",
+      "topic": "Simple Conversations",
+      "objective": "Participate in simple conversations (greetings).",
+      "page_start": 12,
+      "page_end": 13,
+      "sections": [
+        {
+          "page_number": "12",
+          "section_name": "Warm Up",
+          "duration": "3-5 min",
+          "content": "Hello Song! Instruction: Teach 1 line at a time, and have students echo you. Sing to the tune of ‘Mary Had a Little Lamb’. Good morning, (x2), how are you? (x3) Good morning, (x2) how are you today? Good afternoon, (x2) how are you? (x3) Good afternoon, (x2) how are you today? Good evening, (x2) how are you? (x3) Good evening, (x2) how are you today?"
+        },
+        {
+          "page_number": "12",
+          "section_name": "Starter",
+          "duration": "1 min",
+          "content": "Today, we will learn to greet in English. Turn to page 1."
+        },
+        {
+          "page_number": "12",
+          "section_name": "I do - Key Learning Points",
+          "duration": "10-15 min",
+          "content": "Instruction: Read each KLP. Have students point to each picture, and repeat each greeting twice. 1. The beginning of the day is morning, we say: Good morning 2. The middle of the day is afternoon, we say: Good afternoon 3. The end of the day is evening, we say: Good evening 4. When we see someone for the first time, we say Hello / Hi 5. When we are leaving we say Goodbye."
+        },
+        {
+          "page_number": "13",
+          "section_name": "Check for Understanding",
+          "duration": "3 min",
+          "content": "Instruction: Students point to the picture in their student book and answer the questions. 1. What do we say at the beginning of the day? Answer: Good morning. 2. What do we say at the end of the day? Answer: Good evening. 3. What do we say when we are leaving? Answer: Goodbye."
+        },
+        {
+          "page_number": "13",
+          "section_name": "We do - Model and Practice",
+          "duration": "5 min",
+          "content": "Instruction: Pick a student to model the first greeting with. Ask students to complete the ‘Do It Together’ in groups. Steps 1. Listen to the instruction. 2. Practise with your partner. Model as Expert 1. Greet your friend in the morning. Answer: Wave and say: ‘Good morning!’ Do It Together 2. Greet your partner in the afternoon. Answer: Wave and say: ‘Good afternoon!’"
+        },
+        {
+          "page_number": "13",
+          "section_name": "You do - Independent Practice",
+          "duration": "10 min",
+          "content": "Instruction: Have students work in pairs, using all the greetings they’ve learnt. Call the time of the day and students respond with the greeting to the partner. 1. Greet your friend in the morning. 2. Greet your partner in the afternoon. 3. Greet your partner in the evening. 4. Greet your partner when you first see them. 5. Greet your partner when you are leaving."
+        },
+        {
+          "page_number": "13",
+          "section_name": "Turn and Talk",
+          "duration": "1 min",
+          "content": "Greet the person next to you."
+        }
+      ]
+    },
+    {
+      "lesson_number": "2",
+      "title": "Lesson 2",
+      "topic": "Classroom Instructions",
+      "objective": "Learn simple classroom instructions",
+      "page_start": 14,
+      "page_end": 15,
+      "sections": [
+        {
+          "page_number": "14",
+          "section_name": "Warm Up",
+          "duration": "3-5 min",
+          "content": "Instruction: Tell students that you will read out some words. They need to clap on every beat of the word and then tell you how many syllables they counted. Do the first one as an example. 1. Good morning → Good-morn-ing (3 syllables) 2. Good afternoon → Good-aft-er-noon (4 syllables) 3. Good evening → Good-eve-ning (3 syllables) 4. Goodbye → Good-bye (2 syllables)"
+        },
+        {
+          "page_number": "14",
+          "section_name": "Starter",
+          "duration": "1 min",
+          "content": "Today we will learn simple classroom instructions. Turn to page 1"
+        },
+        {
+          "page_number": "14",
+          "section_name": "I do - Key Learning Points",
+          "duration": "10 min",
+          "content": "Instruction: Model and practice together with students, saying the words 2-3 times and doing the actions. Point in front, touch your hand, stand up, sit down, and say something."
+        },
+        {
+          "page_number": "14",
+          "section_name": "Check for Understanding",
+          "duration": "5 min",
+          "content": "Instruction: Read out the action, students do the action and repeat the action word. 1. Sit 2. Touch 3. Stand 4. Point"
+        },
+        {
+          "page_number": "15",
+          "section_name": "We do - Model and Practice",
+          "duration": "5 min",
+          "content": "Instruction: Model how to tell someone to do an action and then do the action. They then say what they can do: 'I am _______ing'. Steps 1. Listen to your teacher say the action word. 2. Do the action. 3. Say, 'I am ____ing'. Model as Expert 1. Point Teacher: Point! Teacher points. Teacher says: I am pointing. Do It Together 2. Touch Teacher: Touch! Students touch their arms. Students say: I am touching."
+        },
+        {
+          "page_number": "15",
+          "section_name": "You do - Independent Practice",
+          "duration": "10-15 min",
+          "content": "Instruction: Students take up roles as Partner 1 and Partner 2. After practising, they switch roles so that both students practise. 1. Stand Partner 1: Stand! Partner 2 Stands up. Partner 2: I am standing! 2. Sit Partner 1: Sit! Partner 2 Sits down. Partner 2: I am sitting! 3. Say Partner 1: Say! Partner 2 Says something to Partner A. Partner 2: I am saying! Challenge 4. Point, Stand and Sit! Do all these actions as fast as you can. Say all the actions. Answer: I am pointing, standing and sitting!"
+        },
+        {
+          "page_number": "15",
+          "section_name": "Turn and Talk",
+          "duration": "1 min",
+          "content": "Tell your partner two words you learned today."
+        }
+      ]
+    }
+  ]
+}

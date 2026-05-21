@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "Bash(Get-ChildItem *)",
+      "PowerShell(&\".\\\\.venv\\\\Scripts\\\\python.exe\" -m pip install chromadb)"
+    ]
+  }
+}
