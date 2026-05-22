@@ -241,6 +241,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 class Question(BaseModel):
     question: str
+    wa_id: str
 
 
 @app.get("/")
@@ -271,10 +272,11 @@ async def query(req: Question):
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question required")
     try:
+        logger.info(f"Query from wa_id: {req.wa_id}")
         results, filters = search_lessons(req.question)
-        return {**results, "filters_applied": filters}
+        return {**results, "filters_applied": filters, "wa_id": req.wa_id}
     except Exception as e:
-        logger.error(f"Query error: {e}")
+        logger.error(f"Query error (wa_id: {req.wa_id}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -284,6 +286,7 @@ async def answer(req: Question):
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question required")
     try:
+        logger.info(f"Answer request from wa_id: {req.wa_id}")
         results, _ = search_lessons(req.question)
         if not results["ids"][0]:
             raise HTTPException(status_code=404, detail="No lessons found")
@@ -292,6 +295,7 @@ async def answer(req: Question):
         return {
             "answer": answer_text,
             "question": req.question,
+            "wa_id": req.wa_id,
             "sources": [
                 {
                     "lesson_number": m["lesson_number"],
@@ -304,7 +308,7 @@ async def answer(req: Question):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Answer error: {e}")
+        logger.error(f"Answer error (wa_id: {req.wa_id}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
