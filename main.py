@@ -5,6 +5,7 @@ import logging
 from functools import lru_cache
 from difflib import get_close_matches
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,6 +81,40 @@ def _supabase_post(endpoint, json_data):
     return resp.json()
 
 
+def check_wa_id_24h(wa_id):
+    """Check if wa_id has a record within past 24 hours. Returns subject/level or -1."""
+    try:
+        rows = _supabase_get("user_access_log", params={
+            "wa_id": f"eq.{wa_id}",
+            "select": "subject,level,access_time"
+        })
+
+        if rows:
+            record = rows[0]
+            access_time = datetime.fromisoformat(record["access_time"].replace("Z", "+00:00"))
+            if datetime.now(access_time.tzinfo) - access_time < timedelta(hours=24):
+                return {"subject": record["subject"], "level": record["level"]}
+
+        return -1
+    except Exception as e:
+        logger.error(f"Error checking wa_id {wa_id}: {e}")
+        return -1
+
+
+def update_wa_id_access(wa_id, subject=None, level=None):
+    """Update or insert user access record."""
+    try:
+        _supabase_post("user_access_log", {
+            "wa_id": wa_id,
+            "access_time": datetime.utcnow().isoformat(),
+            "subject": subject,
+            "level": level,
+        })
+        logger.info(f"Updated access log for wa_id: {wa_id}")
+    except Exception as e:
+        logger.error(f"Error updating access log for {wa_id}: {e}")
+
+
 def _ensure_catalog():
     """Load catalog from Supabase (lazy-load)."""
     global _catalog, _topic_to_lesson, _lesson_sections
@@ -138,22 +173,36 @@ def _parse_json(text):
 
 
 def normalize_query(user_query):
-    """Extract filters from user query using GPT."""
+    """Extract filters from user query using GPT, including subject and level."""
     catalog, topic_to_lesson, lesson_sections = _ensure_catalog()
 
-    prompt = f"""Identify lesson metadata from this question. Return ONLY JSON, omit unknown fields.
+    prompt = f"""Identify lesson metadata and user profile from this question. Return ONLY JSON, omit unknown fields.
 Available: lesson_number: {catalog['lesson_number']}, topic: {catalog['topic']}, section_name: {catalog['section_name']}
+Subject values: FR (Faster Reading), FM (Faster Math)
+Level values: Oral, Letter, Word, Sentence, Story
 Question: "{user_query}"
-Return: {{"lesson_number": "X", "section_name": "Y"}} or {{}}"""
+Return: {{"lesson_number": "X", "section_name": "Y", "subject": "FR/FM", "level": "Oral/Letter/Word/Sentence/Story"}}"""
 
     text = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=100
+        max_tokens=150
     ).choices[0].message.content.strip()
 
     filters = _parse_json(text)
     logger.info(f"Filters extracted: {filters}")
+
+    # Validate subject
+    valid_subjects = ["FR", "FM"]
+    if "subject" in filters and filters["subject"] not in valid_subjects:
+        logger.warning(f"Invalid subject: {filters['subject']}")
+        filters.pop("subject")
+
+    # Validate level
+    valid_levels = ["Oral", "Letter", "Word", "Sentence", "Story"]
+    if "level" in filters and filters["level"] not in valid_levels:
+        logger.warning(f"Invalid level: {filters['level']}")
+        filters.pop("level")
 
     # Resolve topic → lesson_number
     if "topic" in filters and "lesson_number" not in filters:
@@ -173,8 +222,15 @@ Return: {{"lesson_number": "X", "section_name": "Y"}} or {{}}"""
         else:
             filters.pop("section_name")
 
-    # Validate filters exist in catalog
-    validated = {f: v for f, v in filters.items() if f in catalog and v in catalog[f]}
+    # Validate filters exist in catalog (except subject and level)
+    validated = {f: v for f, v in filters.items() if f not in ["subject", "level"] and f in catalog and v in catalog[f]}
+
+    # Keep subject and level in validated
+    if "subject" in filters:
+        validated["subject"] = filters["subject"]
+    if "level" in filters:
+        validated["level"] = filters["level"]
+
     return validated
 
 
@@ -273,8 +329,16 @@ async def query(req: Question):
         raise HTTPException(status_code=400, detail="Question required")
     try:
         logger.info(f"Query from wa_id: {req.wa_id}")
+
+        cached = check_wa_id_24h(req.wa_id)
+        is_new_session = cached == -1
+
         results, filters = search_lessons(req.question)
-        return {**results, "filters_applied": filters, "wa_id": req.wa_id}
+        subject = filters.get("subject")
+        level = filters.get("level")
+        if subject or level:
+            update_wa_id_access(req.wa_id, subject=subject, level=level)
+        return {**results, "filters_applied": filters, "wa_id": req.wa_id, "is_new_session": is_new_session, "cached": cached if not is_new_session else None, "extracted": {"subject": subject, "level": level}}
     except Exception as e:
         logger.error(f"Query error (wa_id: {req.wa_id}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -287,15 +351,28 @@ async def answer(req: Question):
         raise HTTPException(status_code=400, detail="Question required")
     try:
         logger.info(f"Answer request from wa_id: {req.wa_id}")
-        results, _ = search_lessons(req.question)
+
+        cached = check_wa_id_24h(req.wa_id)
+        is_new_session = cached == -1
+
+        results, filters = search_lessons(req.question)
         if not results["ids"][0]:
             raise HTTPException(status_code=404, detail="No lessons found")
 
+        subject = filters.get("subject")
+        level = filters.get("level")
+        if subject or level:
+            update_wa_id_access(req.wa_id, subject=subject, level=level)
+
         answer_text = generate_answer(results, req.question)
+
         return {
             "answer": answer_text,
             "question": req.question,
             "wa_id": req.wa_id,
+            "is_new_session": is_new_session,
+            "cached": cached if not is_new_session else None,
+            "extracted": {"subject": subject, "level": level},
             "sources": [
                 {
                     "lesson_number": m["lesson_number"],
