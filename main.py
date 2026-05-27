@@ -14,8 +14,8 @@ import requests
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
-# from langfuse import Langfuse
-# from langfuse.openai import openai_integration
+from langfuse import Langfuse
+from langfuse.openai import openai_integration
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
