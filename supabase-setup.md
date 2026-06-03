@@ -19,9 +19,13 @@
   vector_cosine_ops) with (lists = 100);
 
 
-  create or replace function search_lessons_vector(
+create or replace function search_lessons_vector(
     query_embedding vector(1536),
-    match_count int default 4
+    match_count int default 4,
+    filter_subject text default null,
+    filter_level text default null,
+    filter_lesson_number text default null,
+    filter_section_name text default null
   )
   returns table(
     id text,
@@ -41,9 +45,30 @@
       lessons_chunks.section_name,
       lessons_chunks.content,
       lessons_chunks.duration,
-      (1 - (lessons_chunks.embedding <=> query_embedding)) as similarity
+      (1 - (lessons_chunks.embedding <=> query_embedding)) as
+  similarity
     from lessons_chunks
+    where
+     filter_subject is not null
+    and filter_level is not null
+    and lessons_chunks.subject = filter_subject
+    and lessons_chunks.level = filter_level
+    and   (filter_lesson_number is null or lessons_chunks.lesson_number
+   = filter_lesson_number)
+      and (filter_section_name is null or
+  lessons_chunks.section_name = filter_section_name)
     order by lessons_chunks.embedding <=> query_embedding
     limit match_count;
   end;
   $$ language plpgsql;
+
+
+    CREATE TABLE user_access_log (
+    wa_id TEXT PRIMARY KEY,
+    access_time TIMESTAMP NOT NULL DEFAULT NOW(),
+    subject TEXT,
+    level TEXT
+  );
+
+  CREATE INDEX idx_user_access_time ON
+  user_access_log(access_time);

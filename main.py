@@ -1,4 +1,18 @@
-"""Lesson Query API - FastAPI Server"""
+"""
+Lesson Query API - FastAPI Server
+
+This application provides a RAG (Retrieval-Augmented Generation) system for
+teachers in Sub-Saharan Africa to query lesson content and get AI-generated answers.
+
+Architecture:
+- FastAPI endpoints: /answer (search + generate), /health
+- Database: Supabase (vector embeddings, lesson content)
+- LLM: OpenAI GPT-4o-mini for both embeddings and answer generation
+"""
+
+# ============================================================================
+# IMPORTS
+# ============================================================================
 
 import json
 import logging
@@ -14,42 +28,46 @@ import requests
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
-from langfuse import Langfuse
-from langfuse.openai import openai_integration
+from typing import Optional
 
+
+class QueryNormalization(BaseModel):
+    subject: Optional[str] = None
+    level: Optional[str] = None
+    lesson_number: Optional[str] = None
+    topic: Optional[str] = None
+    section_name: Optional[str] = None
+    clean_query: str
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# Load environment variables from .env file
 load_dotenv()
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load API keys from environment
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-# LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
-# LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
 
+# Validate required keys
 if not OPENAI_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("SUPABASE_URL and SUPABASE_KEY not found in .env")
 
-# langfuse = Langfuse(
-#     public_key=LANGFUSE_PUBLIC_KEY,
-#     secret_key=LANGFUSE_SECRET_KEY
-# ) if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY else None
-#
-# if langfuse:
-#     openai_integration()
-#     logger.info("✓ Langfuse integration initialized")
+# LLM configuration
+EMBEDDING_MODEL = "text-embedding-3-small"  # For generating query embeddings
+LLM_MODEL = "gpt-4o-mini"  # For generating answers
+MATCH_COUNT = 7  # Number of lessons to retrieve for context
+FUZZY_CUTOFF = 0.3  # Threshold for fuzzy-matching lesson names
 
-langfuse = None
-
-logger.info(f"✓ API Key loaded: {OPENAI_KEY[:20]}...{OPENAI_KEY[-10:]}")
-
-EMBEDDING_MODEL = "text-embedding-3-small"
-LLM_MODEL = "gpt-4o-mini"
-MATCH_COUNT = 7
-FUZZY_CUTOFF = 0.3
-
+# System prompt for the AI
 SYSTEM_PROMPT = (
     "You are a friendly teaching buddy helping teachers in Sub-Saharan Africa 🌍💚. "
     "Their English may be basic, so always:\n"
@@ -60,44 +78,39 @@ SYSTEM_PROMPT = (
     "Answer only using the lesson content provided."
 )
 
+# ============================================================================
+# EXTERNAL API CLIENTS
+# ============================================================================
+
+# Initialize OpenAI client for embeddings and LLM calls
 client = OpenAI(api_key=OPENAI_KEY)
+
+# Initialize Supabase session with authentication headers
 session = requests.Session()
 session.headers.update({
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
 })
 
+# ============================================================================
+# CATALOG MANAGEMENT (Cached)
+# ============================================================================
+
+# Cache for lesson catalog to avoid repeated database queries
 _catalog = None
-_topic_to_lesson = None
-_lesson_sections = None
-
-
-# def log_trace(trace_name, metadata=None, input_data=None):
-#     """Create a trace in Langfuse."""
-#     if not langfuse:
-#         return None
-#     return langfuse.trace(name=trace_name, input=input_data, metadata=metadata or {})
-#
-#
-# def log_span(trace, span_name, metadata=None, input_data=None):
-#     """Create a span in a trace."""
-#     if not trace:
-#         return None
-#     return trace.span(name=span_name, input=input_data, metadata=metadata or {})
-
-def log_trace(trace_name, metadata=None, input_data=None):
-    return None
-
-def log_span(trace, span_name, metadata=None, input_data=None):
-    return None
 
 
 def _supabase_get(endpoint, params=None):
-    """GET from Supabase REST API."""
-    # span = None
-    # if langfuse and langfuse.get_current_trace():
-    #     span = langfuse.get_current_trace().span(name=f"supabase_get_{endpoint}", input={"params": params})
+    """
+    Make a GET request to Supabase REST API.
 
+    Args:
+        endpoint: API endpoint (e.g., 'lessons_chunks')
+        params: Query parameters
+
+    Returns:
+        JSON response from Supabase
+    """
     resp = session.get(
         f"{SUPABASE_URL}/rest/v1/{endpoint}",
         params=params,
@@ -105,20 +118,20 @@ def _supabase_get(endpoint, params=None):
         timeout=10
     )
     resp.raise_for_status()
-    result = resp.json()
-
-    # if span:
-    #     span.end(output={"row_count": len(result) if isinstance(result, list) else 1})
-
-    return result
+    return resp.json()
 
 
 def _supabase_post(endpoint, json_data):
-    """POST to Supabase RPC."""
-    # span = None
-    # if langfuse and langfuse.get_current_trace():
-    #     span = langfuse.get_current_trace().span(name=f"supabase_post_{endpoint}", input={"data_keys": list(json_data.keys())})
+    """
+    Make a POST request to Supabase REST API (for RPC calls).
 
+    Args:
+        endpoint: API endpoint (e.g., 'rpc/search_lessons_vector')
+        json_data: Request body
+
+    Returns:
+        JSON response from Supabase
+    """
     resp = session.post(
         f"{SUPABASE_URL}/rest/v1/{endpoint}",
         json=json_data,
@@ -126,16 +139,17 @@ def _supabase_post(endpoint, json_data):
         timeout=10
     )
     resp.raise_for_status()
-    result = resp.json()
-
-    # if span:
-    #     span.end(output={"row_count": len(result) if isinstance(result, list) else 1})
-
-    return result
+    return resp.json()
 
 
 def check_wa_id_24h(wa_id):
-    """Check if wa_id has a record within past 24 hours. Returns subject/level or -1."""
+    """
+    Check if a user (wa_id) has an active session within the past 24 hours.
+
+    Returns:
+        Dictionary with {subject, level} if active session exists
+        -1 if no active session (new user or session expired)
+    """
     try:
         rows = _supabase_get("user_access_log", params={
             "wa_id": f"eq.{wa_id}",
@@ -145,6 +159,7 @@ def check_wa_id_24h(wa_id):
         if rows:
             record = rows[0]
             access_time = datetime.fromisoformat(record["access_time"].replace("Z", "+00:00"))
+            # Check if record is within 24 hours
             if datetime.now(access_time.tzinfo) - access_time < timedelta(hours=24):
                 return {"subject": record["subject"], "level": record["level"]}
 
@@ -155,161 +170,216 @@ def check_wa_id_24h(wa_id):
 
 
 def update_wa_id_access(wa_id, subject=None, level=None):
-    """Update or insert user access record."""
+    """
+    Update user access log with latest session info (upsert).
+
+    Since wa_id is the primary key:
+    - Creates a new record if user is new
+    - Updates the existing record if user returns (merges on duplicate wa_id)
+
+    The Prefer: resolution=merge-duplicates header enables upsert semantics
+    instead of failing on duplicate wa_id.
+
+    Args:
+        wa_id: User's WhatsApp ID (phone number)
+        subject: Learning subject (FR=Faster Reading, FM=Faster Math)
+        level: Learning level (Oral, Letter, Word, Sentence, Story)
+    """
     try:
-        _supabase_post("user_access_log", {
-            "wa_id": wa_id,
-            "access_time": datetime.utcnow().isoformat(),
-            "subject": subject,
-            "level": level,
-        })
-        logger.info(f"Updated access log for wa_id: {wa_id}")
+        resp = session.post(
+            f"{SUPABASE_URL}/rest/v1/user_access_log",
+            json={
+                "wa_id": wa_id,
+                "access_time": datetime.utcnow().isoformat(),
+                "subject": subject,
+                "level": level,
+            },
+            headers={
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates",
+            },
+            timeout=10
+        )
+        resp.raise_for_status()
     except Exception as e:
         logger.error(f"Error updating access log for {wa_id}: {e}")
 
 
 def _ensure_catalog():
-    """Load catalog from Supabase (lazy-load)."""
-    global _catalog, _topic_to_lesson, _lesson_sections
+    """
+    Load and cache the lesson catalog from Supabase.
+
+    Returns:
+        Dict with lesson_number, topic, section_name, objective, subject, level
+    """
+    global _catalog
 
     if _catalog is not None:
-        return _catalog, _topic_to_lesson, _lesson_sections
+        return _catalog
 
-    logger.info("Loading catalog from Supabase...")
     rows = _supabase_get("lessons_chunks", params={
-        "select": "lesson_number,topic,section_name,objective"
+        "select": "lesson_number,topic,section_name,objective,subject,level"
     })
 
-    catalog = {field: set() for field in ["lesson_number", "topic", "section_name", "objective"]}
-    topic_to_lesson = {}
-    lesson_sections = {}
-
+    catalog = {field: set() for field in ["lesson_number", "topic", "section_name", "objective", "subject", "level"]}
     for row in rows:
         for field in catalog:
             if row.get(field):
                 catalog[field].add(row[field])
 
-        if row.get("topic") and row.get("lesson_number"):
-            topic_to_lesson[row["topic"]] = row["lesson_number"]
+    _catalog = {k: sorted(v) if v else [] for k, v in catalog.items()}
+    logger.info(f"Catalog loaded: {len(_catalog.get('lesson_number', []))} lessons")
+    return _catalog
 
-        if row.get("lesson_number") and row.get("section_name"):
-            lesson_num = row["lesson_number"]
-            if lesson_num not in lesson_sections:
-                lesson_sections[lesson_num] = set()
-            lesson_sections[lesson_num].add(row["section_name"])
 
-    _catalog = {k: sorted(v) for k, v in catalog.items()}
-    _topic_to_lesson = topic_to_lesson
-    _lesson_sections = {k: sorted(v) for k, v in lesson_sections.items()}
-
-    logger.info(f"Catalog loaded: {len(_catalog['lesson_number'])} lessons")
-    return _catalog, _topic_to_lesson, _lesson_sections
-
+# ============================================================================
+# LLM OPERATIONS
+# ============================================================================
 
 @lru_cache(maxsize=128)
 def _get_embedding(text):
-    """Generate and cache embedding."""
+    """
+    Generate and cache embedding for text using OpenAI.
+
+    Uses LRU cache to avoid re-embedding the same text.
+
+    Args:
+        text: Text to embed
+
+    Returns:
+        Embedding vector
+    """
     return client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=text
     ).data[0].embedding
 
 
-def _parse_json(text):
-    """Parse JSON from LLM response."""
-    if text.startswith("```"):
-        text = text.split("```")[1].removeprefix("json").strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {}
 
 
-def normalize_query(user_query, trace=None):
-    """Extract filters from user query using GPT, including subject and level."""
-    catalog, topic_to_lesson, lesson_sections = _ensure_catalog()
+def normalize_query(user_query):
+    """
+    Extract structured metadata from user query using GPT and return cleaned query.
 
-    prompt = f"""Identify lesson metadata and user profile from this question. Return ONLY JSON, omit unknown fields.
-Available: lesson_number: {catalog['lesson_number']}, topic: {catalog['topic']}, section_name: {catalog['section_name']}
-Subject values: FR (Faster Reading), FM (Faster Math)
-Level values: Oral, Letter, Word, Sentence, Story
-Question: "{user_query}"
-Return: {{"lesson_number": "X", "section_name": "Y", "subject": "FR/FM", "level": "Oral/Letter/Word/Sentence/Story"}}"""
+    Uses LLM to identify:
+    - lesson_number: Which lesson is relevant
+    - section_name: Which section of the lesson
+    - subject: Learning subject (FR or FM)
+    - level: Learning level (Oral, Letter, Word, Sentence, Story)
+    - clean_query: Query rewritten with metadata terms removed
 
-    # span = log_span(trace, "normalize_query", input_data={"question": user_query})
+    Args:
+        user_query: User's natural language question
 
-    text = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=150
-    ).choices[0].message.content.strip()
+    Returns:
+        Tuple of (filters_dict, clean_query_str)
+    """
+    catalog = _ensure_catalog()
 
-    filters = _parse_json(text)
-    logger.info(f"Filters extracted: {filters}")
+    normalization_prompt = f"""
+    You are a query normalization system.
 
-    # if span:
-    #     span.end(output=filters)
+    Your task is to extract lesson metadata from a user's query and produce a cleaned query.
 
-    # Validate subject
-    valid_subjects = ["FR", "FM"]
-    if "subject" in filters and filters["subject"] not in valid_subjects:
-        logger.warning(f"Invalid subject: {filters['subject']}")
-        filters.pop("subject")
+    Rules:
+    - Extract only metadata that is explicitly mentioned or clearly matches one of the available values.
+    - Never guess or infer missing metadata.
+    - Match values only from the provided catalogs.
+    - Remove extracted metadata terms from the query when creating clean_query.
+    - Preserve the educational or pedagogical intent of the query.
+    - If removing metadata would leave the query empty, use the original query.
+    - If a field cannot be extracted, return null for that field.
+    - Subject can be called by the user as Faster Reading (FR) or Faster Math (FM)
 
-    # Validate level
-    valid_levels = ["Oral", "Letter", "Word", "Sentence", "Story"]
-    if "level" in filters and filters["level"] not in valid_levels:
-        logger.warning(f"Invalid level: {filters['level']}")
-        filters.pop("level")
+    Available values:
 
-    # Resolve topic → lesson_number
-    if "topic" in filters and "lesson_number" not in filters:
-        topic_val = filters.pop("topic")
-        if topic_val in topic_to_lesson:
-            filters["lesson_number"] = topic_to_lesson[topic_val]
+    Subjects:
+    {catalog['subject']}
 
-    # Fuzzy-match section_name
-    if "section_name" in filters:
-        raw = filters["section_name"]
-        lesson_num = filters.get("lesson_number")
-        pool = lesson_sections.get(lesson_num, catalog["section_name"]) if lesson_num else catalog["section_name"]
+    Levels:
+    {catalog['level']}
 
-        match = get_close_matches(raw, pool, n=1, cutoff=FUZZY_CUTOFF)
-        if match:
-            filters["section_name"] = match[0]
-        else:
-            filters.pop("section_name")
+    Lesson Numbers:
+    {catalog['lesson_number']}
 
-    # Validate filters exist in catalog (except subject and level)
-    validated = {f: v for f, v in filters.items() if f not in ["subject", "level"] and f in catalog and v in catalog[f]}
+    Topics:
+    {catalog['topic']}
 
-    # Keep subject and level in validated
-    if "subject" in filters:
-        validated["subject"] = filters["subject"]
-    if "level" in filters:
-        validated["level"] = filters["level"]
+    Section Names:
+    {catalog['section_name']}
+    """
+    user_prompt = f""" User query: {user_query} """
 
-    return validated
+    response = client.responses.parse(
+    model="gpt-4o-mini",
+    instructions=normalization_prompt,
+    input=user_prompt,
+    text_format=QueryNormalization,
+    )
+
+    return response.output_parsed
 
 
-def search_lessons(user_query, trace=None):
-    """Search lessons by query."""
+def search_lessons(user_query, subject_level, wa_id):
+    """
+    Search Supabase for lessons matching the query.
+
+    Process:
+    1. Normalize query to extract metadata (subject, level, lesson number)
+    2. Merge with cached session subject/level as fallback
+    3. Generate embedding for the query
+    4. Perform vector similarity search in Supabase
+    5. Update user session if subject/level changed from cache
+
+    Args:
+        user_query: User's question
+        subject_level: Cached session dict or -1 if new user
+        wa_id: WhatsApp user ID for tracking
+
+    Returns:
+        Tuple of (results, filters_dict)
+        - results: Dict with documents, metadata, distances, ids
+        - filters_dict: Dict of extracted metadata
+    """
     _ensure_catalog()
 
-    filters = normalize_query(user_query, trace)
+    result = normalize_query(user_query)
+    clean_query = result.clean_query or user_query
 
-    # span = log_span(trace, "search_vector", input_data={"query": user_query, "filters": filters})
-    embedding = _get_embedding(user_query)
+    logger.info(f"Original query: {user_query} Clean query: {clean_query}  Normalization: {result}")
+
+    session_data = subject_level if isinstance(subject_level, dict) else {}
+    subject = result.subject or session_data.get("subject")
+    level = result.level or session_data.get("level")
+    lesson_number = result.lesson_number
+    section_name = result.section_name
+
+    subject_changed = subject and subject != session_data.get("subject")
+    level_changed = level and level != session_data.get("level")
+    if subject_changed or level_changed:
+        update_wa_id_access(wa_id, subject=subject, level=level)
+
+    embedding = _get_embedding(clean_query)
 
     rows = _supabase_post("rpc/search_lessons_vector", {
         "query_embedding": embedding,
         "match_count": MATCH_COUNT,
-        "filter_lesson_number": filters.get("lesson_number"),
-        "filter_section_name": filters.get("section_name"),
+        "filter_subject": subject,
+        "filter_level": level,
+        "filter_lesson_number": lesson_number,
+        "filter_section_name": section_name,
     })
 
-    # if span:
-    #     span.end(output={"result_count": len(rows)})
+    if not rows or not isinstance(rows, list):
+        logger.warning(f"No results from Supabase: {type(rows)}")
+        rows = []
+
+    filters_dict = {
+        "subject": subject,
+        "level": level,
+        "lesson_number": lesson_number,
+        "section_name": section_name,
+    }
 
     return {
         "documents": [[r["content"] for r in rows]],
@@ -320,141 +390,144 @@ def search_lessons(user_query, trace=None):
         } for r in rows]],
         "distances": [[r.get("similarity", 0) for r in rows]],
         "ids": [[r["id"] for r in rows]],
-    }, filters
+    }, filters_dict
 
 
 def generate_answer(results, user_query):
-    """Generate AI answer from results."""
+    """
+    Generate AI answer using retrieved lesson content as context.
+
+    Uses GPT to synthesize an answer based on:
+    - Retrieved lesson content from search_lessons()
+    - User's original question
+    - System prompt (friendly, simple English for African teachers)
+
+    Args:
+        results: Search results from search_lessons()
+        user_query: User's original question
+
+    Returns:
+        Generated answer text
+    """
     if not results["documents"][0]:
         raise ValueError("No lessons to answer from")
 
+    # Format retrieved lessons as context
     retrieved = "\n\n".join([
         f"[Lesson {m['lesson_number']}, {m['section_name']}]:\n{doc}"
         for doc, m in zip(results["documents"][0], results["metadatas"][0])
     ])
 
-    return client.chat.completions.create(
+    # Generate answer using GPT
+    response = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Content:\n{retrieved}\n\nQuestion: {user_query}"}
         ],
         max_tokens=500
-    ).choices[0].message.content
+    )
 
+    return response.choices[0].message.content
+
+
+# ============================================================================
+# FASTAPI APPLICATION
+# ============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Application lifecycle handler.
+    Startup: Load and cache lesson catalog
+    Shutdown: Cleanup resources
+    """
     try:
+        # Pre-load catalog into memory on startup to avoid delays on first request
         _ensure_catalog()
-        logger.info("✓ Server ready")
     except Exception as e:
-        logger.error(f"✗ Startup failed: {e}")
+        logger.error(f"Startup failed: {e}")
         raise
     yield
+    # Shutdown cleanup happens here if needed
 
 
-app = FastAPI(title="Lesson Query API", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(
+    title="Lesson Query API",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
+# Enable CORS for all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+
+# ============================================================================
+# DATA MODELS
+# ============================================================================
 
 class Question(BaseModel):
+    """Request model for /answer endpoint."""
     question: str
     wa_id: str
 
 
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
 @app.get("/")
 async def root():
-    return {"name": "Lesson Query API", "version": "1.0.0", "docs": "/docs"}
+    """Health check and API info."""
+    return {
+        "name": "Lesson Query API",
+        "version": "1.0.0",
+        "docs": "/docs"
+    }
 
 
 @app.get("/health")
 async def health():
-    catalog, _, _ = _ensure_catalog()
-    return {"status": "ok", "lessons": len(catalog["lesson_number"])}
-
-
-@app.get("/catalog")
-async def get_catalog():
+    """Health check endpoint."""
     catalog, _, _ = _ensure_catalog()
     return {
-        "lesson_numbers": catalog["lesson_number"],
-        "topics": catalog["topic"],
-        "sections": catalog["section_name"],
-        "objectives": catalog["objective"]
+        "status": "ok",
+        "lessons": len(catalog["lesson_number"])
     }
-
-
-@app.post("/query")
-async def query(req: Question):
-    """Search lessons."""
-    if not req.question.strip():
-        raise HTTPException(status_code=400, detail="Question required")
-
-    # trace = log_trace("query", metadata={"wa_id": req.wa_id}, input_data={"question": req.question})
-    trace = None
-
-    try:
-        logger.info(f"Query from wa_id: {req.wa_id}")
-
-        cached = check_wa_id_24h(req.wa_id)
-        is_new_session = cached == -1
-
-        results, filters = search_lessons(req.question, trace)
-        subject = filters.get("subject")
-        level = filters.get("level")
-        if subject or level:
-            update_wa_id_access(req.wa_id, subject=subject, level=level)
-
-        response = {**results, "filters_applied": filters, "wa_id": req.wa_id, "is_new_session": is_new_session, "cached": cached if not is_new_session else None, "extracted": {"subject": subject, "level": level}}
-
-        # if trace:
-        #     trace.end(output=response, metadata={"status": "success", "subject": subject, "level": level})
-
-        return response
-    except Exception as e:
-        logger.error(f"Query error (wa_id: {req.wa_id}): {e}")
-        # if trace:
-        #     trace.end(output={"error": str(e)}, metadata={"status": "error"})
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/answer")
 async def answer(req: Question):
-    """Get AI answer."""
+    """
+    Search for lessons and generate an AI answer.
+
+    Combines /query functionality with LLM-based answer generation.
+    Returns synthesized answer based on retrieved lesson content.
+    """
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question required")
 
-    # trace = log_trace("answer", metadata={"wa_id": req.wa_id}, input_data={"question": req.question})
-    trace = None
-
     try:
-        logger.info(f"Answer request from wa_id: {req.wa_id}")
+        subject_level = check_wa_id_24h(req.wa_id)
+        is_new_session = subject_level == -1
 
-        cached = check_wa_id_24h(req.wa_id)
-        is_new_session = cached == -1
-
-        results, filters = search_lessons(req.question, trace)
+        results, filters = search_lessons(req.question, subject_level, req.wa_id)
         if not results["ids"][0]:
-            raise HTTPException(status_code=404, detail="No lessons found")
-
-        subject = filters.get("subject")
-        level = filters.get("level")
-        if subject or level:
-            update_wa_id_access(req.wa_id, subject=subject, level=level)
-
-        # span = log_span(trace, "generate_answer", input_data={"question": req.question, "context_count": len(results["documents"][0])})
+            return -1
         answer_text = generate_answer(results, req.question)
-        # if span:
-        #     span.end(output={"answer": answer_text})
 
-        response = {
+        return {
             "answer": answer_text,
             "question": req.question,
             "wa_id": req.wa_id,
             "is_new_session": is_new_session,
-            "cached": cached if not is_new_session else None,
-            "extracted": {"subject": subject, "level": level},
+            "cached": subject_level if not is_new_session else None,
+            "extracted": {"subject": filters.get("subject"), "level": filters.get("level")},
             "sources": [
                 {
                     "lesson_number": m["lesson_number"],
@@ -465,20 +538,16 @@ async def answer(req: Question):
             ]
         }
 
-        # if trace:
-        #     trace.end(output=response, metadata={"status": "success", "subject": subject, "level": level, "source_count": len(results["metadatas"][0])})
-
-        return response
-    except HTTPException as he:
-        # if trace:
-        #     trace.end(output={"error": str(he.detail)}, metadata={"status": "error"})
+    except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Answer error (wa_id: {req.wa_id}): {e}")
-        # if trace:
-        #     trace.end(output={"error": str(e)}, metadata={"status": "error"})
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
     import uvicorn
