@@ -17,7 +17,6 @@ Architecture:
 import json
 import logging
 from functools import lru_cache
-from difflib import get_close_matches
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -160,7 +159,7 @@ def check_wa_id_24h(wa_id):
             record = rows[0]
             access_time = datetime.fromisoformat(record["access_time"].replace("Z", "+00:00"))
             # Check if record is within 24 hours
-            if datetime.now(access_time.tzinfo) - access_time < timedelta(hours=24):
+            if datetime.now(access_time.tzinfo) - access_time < timedelta(hours=240):
                 return {"subject": record["subject"], "level": record["level"]}
 
         return -1
@@ -222,13 +221,24 @@ def _ensure_catalog():
     })
 
     catalog = {field: set() for field in ["lesson_number", "topic", "section_name", "objective", "subject", "level"]}
+    topic_to_lesson = {}
+
     for row in rows:
         for field in catalog:
             if row.get(field):
                 catalog[field].add(row[field])
 
+        topic = row.get("topic")
+        lesson = row.get("lesson_number")
+        if topic and lesson:
+            if topic not in topic_to_lesson:
+                topic_to_lesson[topic] = []
+            if lesson not in topic_to_lesson[topic]:
+                topic_to_lesson[topic].append(lesson)
+
     _catalog = {k: sorted(v) if v else [] for k, v in catalog.items()}
-    logger.info(f"Catalog loaded: {len(_catalog.get('lesson_number', []))} lessons")
+    _catalog["topic_to_lesson"] = topic_to_lesson
+    
     return _catalog
 
 
@@ -279,35 +289,131 @@ def normalize_query(user_query):
     normalization_prompt = f"""
     You are a query normalization system.
 
-    Your task is to extract lesson metadata from a user's query and produce a cleaned query.
+Your task is to extract lesson metadata from a user's query and produce a cleaned query.
 
-    Rules:
-    - Extract only metadata that is explicitly mentioned or clearly matches one of the available values.
-    - Never guess or infer missing metadata.
-    - Match values only from the provided catalogs.
-    - Remove extracted metadata terms from the query when creating clean_query.
-    - Preserve the educational or pedagogical intent of the query.
-    - If removing metadata would leave the query empty, use the original query.
-    - If a field cannot be extracted, return null for that field.
-    - Subject can be called by the user as Faster Reading (FR) or Faster Math (FM)
+Rules:
 
-    Available values:
+* Extract only metadata that is explicitly mentioned or clearly matches one of the available values.
+* Never guess or infer missing metadata.
+* Match values only from the provided catalogs.
+* Remove extracted metadata terms from the query when creating clean_query.
+* Preserve the educational or pedagogical intent of the query.
+* If a field cannot be extracted, return null for that field.
+* Subject must always be extracted as its catalog code, not the full name:
 
-    Subjects:
-    {catalog['subject']}
+  * "Faster Reading" or "FR" → extract as "FR"
+  * "Faster Math" or "FM" → extract as "FM"
 
-    Levels:
-    {catalog['level']}
+After extracting metadata:
 
-    Lesson Numbers:
-    {catalog['lesson_number']}
+1. Remove all extracted metadata from the query.
+2. Normalize the remaining text by removing conversational wrappers and navigation language such as:
 
-    Topics:
-    {catalog['topic']}
+   * show me
+   * take me to
+   * open
+   * go to
+   * use
+   * switch to
+   * select
+   * choose
+   * set
+   * change to
+   * can you
+   * please
+   * i want
+   * let me see
+3. Determine whether the remaining text contains a meaningful standalone educational request.
 
-    Section Names:
-    {catalog['section_name']}
+A standalone educational request is something that could reasonably be answered without the extracted metadata and contains at least one of:
+
+* a learning objective
+* a concept or skill
+* a pedagogical action (explain, teach, generate, assess, summarize, review, compare, practice, create, rewrite, simplify, etc.)
+* a question that has meaning on its own
+* additional instructions or constraints
+
+Set clean_query to an empty string if the remaining text:
+
+* consists only of metadata references
+* consists only of navigation or selection language
+* consists only of conversational filler
+* is not understandable as a standalone request
+* contains only generic references such as:
+
+  * lesson
+  * topic
+  * section
+  * this lesson
+  * this topic
+  * this section
+  * that lesson
+  * that topic
+  * that section
+
+Examples:
+
+Input: "FR Level 2 Lesson 5"
+Output:
+
+* subject = "Faster Reading"
+* level = "Level 2"
+* lesson_number = "Lesson 5"
+* clean_query = ""
+
+Input: "Show me FM Lesson 3"
+Output:
+
+* subject = "Faster Math"
+* lesson_number = "Lesson 3"
+* clean_query = ""
+
+Input: "Generate questions for FM Lesson 3"
+Output:
+
+* subject = "Faster Math"
+* lesson_number = "Lesson 3"
+* clean_query = "generate questions"
+
+Input: "Create a harder assessment for Faster Reading Lesson 8"
+Output:
+
+* subject = "Faster Reading"
+* lesson_number = "Lesson 8"
+* clean_query = "create a harder assessment"
+
+Input: "Can you teach inference skills in FR Level 3"
+Output:
+
+* subject = "Faster Reading"
+* level = "Level 3"
+* clean_query = "teach inference skills"
+
+Input: "Explain this concept from Lesson 4"
+Output:
+
+* lesson_number = "Lesson 4"
+* clean_query = "explain this concept"
+
+Available values:
+
+Subjects:
+{catalog['subject']}
+
+Levels:
+{catalog['level']}
+
+Lesson Numbers:
+{catalog['lesson_number']}
+
+Topics:
+{catalog['topic']}
+
+Section Names:
+{catalog['section_name']}
+
     """
+
     user_prompt = f""" User query: {user_query} """
 
     response = client.responses.parse(
@@ -344,9 +450,8 @@ def search_lessons(user_query, subject_level, wa_id):
     _ensure_catalog()
 
     result = normalize_query(user_query)
-    clean_query = result.clean_query or user_query
+    clean_query = result.clean_query
 
-    logger.info(f"Original query: {user_query} Clean query: {clean_query}  Normalization: {result}")
 
     session_data = subject_level if isinstance(subject_level, dict) else {}
     subject = result.subject or session_data.get("subject")
@@ -354,13 +459,45 @@ def search_lessons(user_query, subject_level, wa_id):
     lesson_number = result.lesson_number
     section_name = result.section_name
 
+    logger.info(
+    "Query normalization:\n"
+    "  Original: %s\n"
+    "  Clean: %s\n"
+    "  Subject: %s\n"
+    "  Level: %s\n"
+    "  Result: %s",
+    user_query,
+    clean_query,
+    subject,
+    level,
+    result,
+)
+
+    if result.topic and not lesson_number:
+        topic_to_lesson = _ensure_catalog().get("topic_to_lesson", {})
+        lessons = topic_to_lesson.get(result.topic)
+        logger.info(f"Topic lookup: '{result.topic}' → {lessons}. Available topics: {list(topic_to_lesson.keys())[:10]}")
+        if lessons:
+            lesson_number = lessons[0]
+
     subject_changed = subject and subject != session_data.get("subject")
     level_changed = level and level != session_data.get("level")
-    if subject_changed or level_changed:
+    if (subject_changed or level_changed) and subject and level:
         update_wa_id_access(wa_id, subject=subject, level=level)
+
+    filters_dict = {
+        "subject": subject,
+        "level": level,
+        "lesson_number": lesson_number,
+        "section_name": section_name,
+    }
+
+    if not clean_query:
+        return None, filters_dict
 
     embedding = _get_embedding(clean_query)
 
+    logger.info(filters_dict)
     rows = _supabase_post("rpc/search_lessons_vector", {
         "query_embedding": embedding,
         "match_count": MATCH_COUNT,
@@ -369,17 +506,11 @@ def search_lessons(user_query, subject_level, wa_id):
         "filter_lesson_number": lesson_number,
         "filter_section_name": section_name,
     })
+    logger.info(f"Supabase RPC raw response: {rows}")
 
     if not rows or not isinstance(rows, list):
         logger.warning(f"No results from Supabase: {type(rows)}")
         rows = []
-
-    filters_dict = {
-        "subject": subject,
-        "level": level,
-        "lesson_number": lesson_number,
-        "section_name": section_name,
-    }
 
     return {
         "documents": [[r["content"] for r in rows]],
@@ -517,9 +648,61 @@ async def answer(req: Question):
         is_new_session = subject_level == -1
 
         results, filters = search_lessons(req.question, subject_level, req.wa_id)
+
+        #if user was just trying to update subject level
+        if results is None:
+            subject = filters.get("subject")
+            level = filters.get("level")
+            parts = []
+            if subject: parts.append(f"📚 Subject: {subject}")
+            if level:   parts.append(f"🎯 Level: {level}")
+            confirmation = " | ".join(parts)
+            return {
+                "answer": f"✅ Updated! {confirmation}\n\nWhat would you like to know? 😊" if confirmation else "✅ Got it! What would you like to know? 😊",
+                "question": req.question,
+                "wa_id": req.wa_id,
+                "is_new_session": is_new_session,
+                "cached": subject_level if not is_new_session else None,
+                "extracted": {"subject": subject, "level": level},
+                "sources": []
+            }
+
+
         if not results["ids"][0]:
-            return -1
+            subject = filters.get("subject")
+            level = filters.get("level")
+            if not subject or not level:
+                return {
+                    "answer": "I need more info to help you! 📚\n\nPlease tell me:\n1️⃣ Your subject (Faster Reading/FR or Faster Math/FM)\n2️⃣ Your level (Oral, Letter, Word, Sentence, or Story)\n\nThen ask your question! 😊",
+                    "question": req.question,
+                    "wa_id": req.wa_id,
+                    "is_new_session": is_new_session,
+                    "cached": subject_level if not is_new_session else None,
+                    "extracted": {"subject": subject, "level": level},
+                    "sources": []
+                }
+            else:
+                return {
+                    "answer": f"Sorry, I couldn't find lessons for {subject} at {level} level matching your question. 😕\n\nTry asking about something different or changing your subject/level! 🔄",
+                    "question": req.question,
+                    "wa_id": req.wa_id,
+                    "is_new_session": is_new_session,
+                    "cached": subject_level if not is_new_session else None,
+                    "extracted": {"subject": subject, "level": level},
+                    "sources": []
+                }
+        
         answer_text = generate_answer(results, req.question)
+
+        status_parts = []
+        if filters.get("subject"):
+            status_parts.append(f"📚 Subject: {filters['subject']}")
+        if filters.get("level"):
+            status_parts.append(f"🎯 Level: {filters['level']}")
+        if filters.get("lesson_number"):
+            status_parts.append(f"📖 Lesson: {filters['lesson_number']}")
+        if status_parts:
+            answer_text = " | ".join(status_parts) + "\n\n" + answer_text
 
         return {
             "answer": answer_text,

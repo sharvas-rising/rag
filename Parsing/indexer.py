@@ -5,6 +5,12 @@ import requests
 from dotenv import load_dotenv
 import os
 
+
+# Configuration
+INPUT_FILE = Path(__file__).parent / "pdf" / "fr_letter_sl" / "fr_letter_sl.json"
+SUBJECT = "FR"
+LEVEL = "Letter"
+
 load_dotenv()
 
 env_file = Path(__file__).parent / ".env"
@@ -24,11 +30,10 @@ if not supabase_url or not supabase_key:
     raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
 
 supabase_url = supabase_url.rstrip("/")
-SUBJECT = "FR"
-LEVEL = "Oral"
+
 
 def load_lessons():
-    with open("pdf/fr_oral_sl.json", "r", encoding="utf-8") as f:
+    with open(INPUT_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def get_embedding(text):
@@ -43,7 +48,7 @@ def index_lessons():
         for section in lesson.get("sections", []):
             rich_text = f"{lesson['topic']}. {lesson['objective']}. {section['section_name']}: {section['content']}"
             embedding = get_embedding(rich_text)
-            chunk_id = f"lesson_{lesson['lesson_number']}_section_{section['section_name'].replace(' ', '_').lower()}"
+            chunk_id = f"lesson_{lesson['lesson_number']}_level_{LEVEL.lower()}_section_{section['section_name'].replace(' ', '_').lower()}"
 
             payload = {
                 "id": chunk_id,

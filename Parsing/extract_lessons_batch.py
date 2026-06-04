@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 os.system("cls")
 
 # Read .env file directly
-env_file = Path(__file__).parent / ".env"
+env_file = Path(__file__).parent.parent / ".env"
 api_key = None
 if env_file.exists():
     with open(env_file, "r") as f:
@@ -27,10 +27,12 @@ if api_key:
 else:
     print("ERROR: OPENAI_API_KEY not found in .env file")
 
-pdf_path = Path("pdf") / "fr_oral_sl.pdf"
-csv_path = Path("pdf") / "fr_oral_sl.csv"
-output_folder = Path("pdf") / "fr_oral_sl"
-output_folder.mkdir(exist_ok=True)
+which = "fr_letter_sl"
+lesson_dir = Path(__file__).parent / "pdf" / which
+pdf_path = next(lesson_dir.glob("*.pdf"), None)
+csv_path = next(lesson_dir.glob("*.csv"), None)
+output_folder = lesson_dir / "lesson_jsons"
+output_folder.mkdir(parents=True, exist_ok=True)
 
 client = None  # initialized lazily in main() so CSV/PDF errors surface before SSL init
 

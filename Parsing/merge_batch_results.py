@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 
-input = "fr_oral_sl"
+input = "fr_letter_sl"
 output=f"{input}.json"
 
-lessons_folder = Path("pdf") / input
-output_path = Path("pdf")/output
+lessons_folder = Path(__file__).parent / "pdf" / input / "lesson_jsons"
+output_path = Path(__file__).parent / "pdf" / input / output
 
 def flatten(data):
     lesson = data.get("lesson") or {}
@@ -27,6 +27,7 @@ def sort_key(lesson):
         return (1, str(num))
 
 def main():
+    print(f"Lesson folder: {lessons_folder}")
     lesson_files = sorted(lessons_folder.glob("lesson_*.json"))
     if not lesson_files:
         print(f"No lesson_*.json files found in {lessons_folder}")
