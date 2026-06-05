@@ -43,4 +43,8 @@ session.headers.update({
 
 # --- Initialize LangFuse for tracing (debugging tool) ---
 # Captures all function calls and their inputs/outputs for debugging
-langfuse = Langfuse()
+try:
+    langfuse = Langfuse()
+except Exception as e:
+    print(f"Warning: LangFuse initialization failed ({e}). Tracing disabled.")
+    langfuse = None
