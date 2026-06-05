@@ -22,7 +22,8 @@ from config import client, EMBEDDING_MODEL, LLM_MODEL, MATCH_COUNT
 from models import QueryNormalization, Question, SubjectLevel, LessonMetadata
 from prompts import SYSTEM_PROMPT, build_subject_level_prompt, build_lesson_metadata_prompt
 from db import _ensure_catalog, check_wa_id_24h, update_wa_id_access, _supabase_post, get_filtered_catalog
-from langfuse import observe
+from langfuse import observe, get_client
+langfuse = get_client()
 
 # --- Configure logging ---
 logging.basicConfig(level=logging.INFO)
@@ -50,7 +51,6 @@ def _get_embedding(text):
     ).data[0].embedding
 
 
-@observe()
 def _extract_subject_level(user_query, cached_subject=None, cached_level=None):
     """
     Pass 1 of two-pass normalization: extract subject and level only.
@@ -79,13 +79,14 @@ def _extract_subject_level(user_query, cached_subject=None, cached_level=None):
     )
 
     result = response.output_parsed
-    # Merge with session cache
-    result.subject = result.subject or cached_subject
-    result.level = result.level or cached_level
-    return result
+    # Merge with session cache — create a new object since Pydantic v2 models are immutable
+    return SubjectLevel(
+        subject=result.subject or cached_subject,
+        level=result.level or cached_level,
+        is_command_only=result.is_command_only,
+    )
 
 
-@observe()
 def _extract_lesson_metadata(user_query, filtered_catalog):
     """
     Pass 2 of two-pass normalization: extract lesson metadata from a filtered catalog.
@@ -113,7 +114,7 @@ def _extract_lesson_metadata(user_query, filtered_catalog):
 
     return response.output_parsed
 
-
+@observe
 def normalize_query(user_query, cached_subject=None, cached_level=None):
     """
     Two-pass LLM extraction of query metadata.
@@ -253,8 +254,15 @@ def search_lessons(user_query, cached_subject_level, wa_id):
     if not rows or not isinstance(rows, list):
         rows = []
 
-    # Add search_path to filters_dict so it's visible in LangFuse traces
-    filters_dict["search_path"] = search_path
+    langfuse.update_current_span(
+        metadata={
+            "subject": subject,
+            "level": level,
+            "lesson_number": lesson_number,
+            "search_path": search_path,
+            "is_command_only": result.is_command_only,
+        }
+    )    
 
     return {
         "documents": [[r["content"] for r in rows]],
@@ -305,36 +313,19 @@ def generate_answer(results, user_query):
     return response.choices[0].message.content
 
 
-def _build_response(answer_text, req, is_new_session, cached_subject_level, filters, results=None):
+def _build_response(answer_text, req=None, is_new_session=None, cached_subject_level=None, filters=None, results=None):
     """
     Build the JSON response object sent back to the user.
 
-    This helper avoids repeating the same dict structure across all the different
-    answer paths (command-only, no results, normal question).
+    Lightweight response — returns only the answer.
 
     Args:
       answer_text: The message to send the user
-      req: The incoming request (contains question and wa_id)
-      is_new_session: True if this user has no cached subject/level from before
-      cached_subject_level: Dict of {subject, level} or -1 if new user
-      filters: Dict of extracted metadata {subject, level, lesson_number}
-      results: Search results dict or None if command-only
 
     Returns:
       Dict ready to be serialized to JSON
     """
-    return {
-        "answer": answer_text,
-        "question": req.question,
-        "wa_id": req.wa_id,
-        "is_new_session": is_new_session,
-        "cached": cached_subject_level if not is_new_session else None,
-        "extracted": {"subject": filters.get("subject"), "level": filters.get("level")},
-        "sources": [
-            {"lesson_number": m["lesson_number"], "section_name": m["section_name"], "duration": m["duration"]}
-            for m in results["metadatas"][0]
-        ] if results else []
-    }
+    return {"answer": answer_text}
 
 
 # ============================================================================
