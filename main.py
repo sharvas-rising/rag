@@ -250,8 +250,6 @@ def search_lessons(user_query, cached_subject_level, wa_id):
         search_path = "skipped"
         rows = []
 
-    logger.info(f"Search path: {search_path} | Supabase returned {len(rows) if isinstance(rows, list) else 0} rows")
-
     if not rows or not isinstance(rows, list):
         rows = []
 
